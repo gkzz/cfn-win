@@ -1,0 +1,11 @@
+# general
+.
+..
+
+# vscode
+.vscode
+
+
+# env
+.env
+*.env

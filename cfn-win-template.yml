@@ -1,0 +1,142 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This template create a EC2 instance.
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  InstanceType:
+    Type: String
+    Default: m5n.2xlarge
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.midium
+      - m5n.2xlarge
+      - m5n.4xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+  InstanceImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    #Default: /aws/service/ami-windows-latest/Windows_Server-2016-Japanese-Full-Base
+    Default: /aws/service/ami-windows-latest/Windows_Server-2019-Japanese-Full-Base
+    #Default: /aws/service/ami-windows-latest/Windows_Server-2019-English-Core-Base
+    #Default: /aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base
+  SourceCidrForRDP:
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    AllowedPattern: '^([0-9]+\.){3}[0-9]+\/[0-9]+$'
+    Default: 0.0.0.0/0
+  TagName:
+    Type: String
+    Default: winZoom
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable RDP
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3389
+        ToPort: 3389
+        CidrIp:
+          !Ref SourceCidrForRDP
+  WindowsServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            c:\cfn\cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+            c:\cfn\hooks.d\cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.WindowsServer.Metadata.AWS::CloudFormation::Init
+                action=cfn-init.exe -v --stack ${AWS::StackName} --resource WindowsServer --region ${AWS::Region}
+            c:\cfn\scripts\Setup-config.ps1:
+              content: |
+                # set JST TimeZone
+                tzutil /s "Tokyo Standard Time"
+                Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\TimeZoneInformation" -Name "RealTimeIsUniversal" -Value 1
+
+                # disabled firewall
+                Get-NetFirewallProfile | Set-NetFirewallProfile -Enabled false
+
+                # show fileext and hidden file
+                Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "HideFileExt" -Value 0
+                Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "Hidden" -Value 1
+
+                # set high performance
+                powercfg.exe -SETACTIVE 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+
+                # disabled enhanced security
+                # https://stackoverflow.com/questions/44643997/aws-windows-2012-r2-turning-off-ie-enhanced-security-configuration
+                $admin = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}"
+                $user = "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A8-37EF-4b3f-8CFC-4F3A74704073}"
+
+                Set-ItemProperty -Path $admin -Name "IsInstalled" -Value 0 -Force
+                Set-ItemProperty -Path $user -Name "IsInstalled" -Value 0 -Force
+                Remove-ItemProperty -Path $admin -Name "IsInstalled" -Force
+                Remove-ItemProperty -Path $user -Name "IsInstalled" -Force
+            c:\cfn\scripts\Install-choco-packages.ps1:
+              content: |
+                # install package manager and packages
+                # suppressed warning. UnicodeEncodeError fails because the output contains Japanese.
+                $WarningPreference = "SilentlyContinue"
+                iwr https://chocolatey.org/install.ps1 -UseBasicParsing | iex
+                $WarningPreference = "Continue"
+                choco install -y notepadplusplus.install googlechrome firefox | Out-Null
+          commands:
+            1-setup-config:
+              command: 'powershell.exe -File c:\cfn\scripts\Setup-config.ps1'
+              waitAfterCompletion: '0'
+            2-install-choco-packages:
+              command: 'powershell.exe -File c:\cfn\scripts\Install-choco-packages.ps1 -ExecutionPolicy Bypass'
+              waitAfterCompletion: '0'
+            #3-invoke-webrequest-:
+            #  command: >-
+            #    Invoke-WebRequest `https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe `
+            #    -OutFile $env:USERPROFILE\Desktop\SSMAgent_latest.exe
+            #4-start-process:
+            #  command: >-
+            #    Start-Process `-FilePath $env:USERPROFILE\Desktop\SSMAgent_latest.exe `
+            #    -ArgumentList "/S"
+            #5-rm-ssmagent-exe-file:
+            #  command: rm -Force $env:USERPROFILE\Desktop\SSMAgent_latest.exe
+            #6-restart-ssmagent:
+            #  command: Restart-Service AmazonSSMAgent
+          services:
+            windows:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - c:\cfn\cfn-hup.conf
+                  - c:\cfn\hooks.d\cfn-auto-reloader.conf
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref InstanceImageId
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: !Ref TagName
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          cfn-init.exe -v --stack ${AWS::StackName} --resource WindowsServer --region ${AWS::Region}
+          cfn-signal.exe -e $lastexitcode --stack ${AWS::StackName} --resource WindowsServer --region ${AWS::Region}
+          </powershell>
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+Outputs:
+  WindowsServerHostname:
+    Value: !GetAtt WindowsServer.PublicDnsName
+    Description: WindowsServer Hostname.
