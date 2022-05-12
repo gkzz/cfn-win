@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # . run-cfn-win.sh YOUR_SECRET_KEY
 
 # $1 <--- YOUR_SECRET_KEY

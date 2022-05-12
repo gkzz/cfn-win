@@ -9,9 +9,9 @@ Parameters:
     Type: String
     Default: m5n.2xlarge
     AllowedValues:
-      - t3.micro
-      - t3.small
-      - t3.midium
+#      - t3.micro
+#      - t3.small
+#      - t3.midium
       - m5n.2xlarge
       - m5n.4xlarge
     ConstraintDescription: must be a valid EC2 instance type.
